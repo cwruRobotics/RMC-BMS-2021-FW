@@ -34,11 +34,31 @@ typedef enum
  BMS_ERR_INIT_BQ77
 } BMS_Error_Code;
 
+
+// I2C slave commands (byte 1 recieved)
+typedef enum
+{
+  BMS_GET_STATUS,
+  BMS_GET_PACK_VOLTAGE,
+  BMS_GET_CURRENT,
+  // BMS_TURN_OUTPUT_ON,   // Only available in HOST control mode
+  // BMS_TURN_OUTPUT_OFF   // Only available in HOST control mode
+} BMS_I2C_Command;
+
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
+// Generic I2C stuff
+#define BMS_I2C_TIMEOUT 35U   // In ms
+
+// I2C Slave config
+#define BMS_I2C_SLAVE_ADDR_BASE 0x40          // Base address of device
+
+#define BMS_ERROR_VALUE 0xff  // Value returned if there was an error processing
+                              //  a request on the slave I2C channel
 
 // PINS
 #define BMS_GPIO_0_BANK       GPIOB
@@ -57,24 +77,54 @@ typedef enum
 #define BMS_GPIO_IOUT_PIN     GPIO_PIN_3
 #define BMS_GPIO_TEMP_BANK    GPIOA
 #define BMS_GPIO_TEMP_PIN     GPIO_PIN_4
+#define BMS_GPIO_LED0_BANK    GPIOB
+#define BMS_GPIO_LED0_PIN     GPIO_PIN_12
+#define BMS_GPIO_LED1_BANK    GPIOB
+#define BMS_GPIO_LED1_PIN     GPIO_PIN_13
+#define BMS_GPIO_LED2_BANK    GPIOB
+#define BMS_GPIO_LED2_PIN     GPIO_PIN_14
+#define BMS_GPIO_LED3_BANK    GPIOB
+#define BMS_GPIO_LED3_PIN     GPIO_PIN_15
 
-// I2C Slave config
-#define BMS_I2C_SLAVE_ADDR_BASE 0x40          // Base address of device
 
 // ---
 // Below: see Jan 2009 bq77PL900 datasheet
 // ---
 
 // I2C with bq77p900
-#define BMS_BQ77_I2C_ADDR (0x10 << 1)
+#define BMS_BQ77_I2C_ADDR 0x10 << 1
 
+// Registers
+#define BMS_BQ77_STATUS   0x00
+#define BMS_BQ77_OUTCTL   0x01
+#define BMS_BQ77_STATECTL 0x02
+#define BMS_BQ77_FUNCTL   0x03
+#define BMS_BQ77_CELBALN  0x04
+#define BMS_BQ77_CELSEL   0x05
+#define BMS_BQ77_OVCFG    0x06
+#define BMS_BQ77_UVCFG    0x07
+#define BMS_BQ77_OUVCTL   0x08
+#define BMS_BQ77_OCDCFG   0x09
+#define BMS_BQ77_SCDCFG   0x0a
+#define BMS_BQ77_EEPROM   0x0B
+
+// See pg. 41
+#define BMS_BQ77_STATUS_VGOOD (1 << 5)
+
+// See pg. 42
+// #define BMS_OC_DSC (1 << 1)
+// #define BMS_OC_CHG (2 << 1)
+#define BMS_FAST_SAMPL 0    // 0 = 50ms/cell, 1 = 100us/cell (pg. 42)
+
+
+// See pg. 43
 #define BMS_HOST_SHDWN 0    // In HOST mode, shutdown if PACK = 0V (disabled)
 #define BMS_HOST_HMODE 0    // Set operating mode: 0 = auto, 1 = HOST
 #define BMS_SNSE_CLVTG 0    // Sets cell voltage VGAIN (0.15)
 #define BMS_SNSE_CLCUR 0    // Sets current monitor gain (10)
 
+// See pg. 44
 #define BMS_USES_THERM 0    // 0 = no thermistor, 1 = use thermistor
-#define BMS_FAST_SAMPL 0    // 0 = 50ms/cell, 1 = 100us/cell (pg. 42)
 
 // Cell overvoltage controls
 // See pg. 46
@@ -124,7 +174,7 @@ I2C_HandleTypeDef hi2c2;
 /* USER CODE BEGIN PV */
 
 uint16_t bms_i2c_addr;  // Address of BMS (slave interface)
-uint8_t data_buf;       // Data to be sent over I2C
+uint64_t data_buf;      // Data to be sent or received over I2C
 
 /* USER CODE END PV */
 
@@ -185,21 +235,124 @@ int main(void)
   HAL_GPIO_WritePin(BMS_GPIO_0_BANK, BMS_GPIO_0_PIN, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(BMS_GPIO_1_BANK, BMS_GPIO_1_PIN, GPIO_PIN_RESET);
 
+  // LEDs are on during init
+  HAL_GPIO_WritePin(BMS_GPIO_LED0_BANK, BMS_GPIO_LED0_PIN, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(BMS_GPIO_LED1_BANK, BMS_GPIO_LED1_PIN, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(BMS_GPIO_LED2_BANK, BMS_GPIO_LED2_PIN, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(BMS_GPIO_LED3_BANK, BMS_GPIO_LED3_PIN, GPIO_PIN_SET);
+
   // Get slave address
   bms_i2c_addr = HAL_GPIO_ReadPin(BMS_GPIO_SLOTID_BANK, BMS_GPIO_SLOTID_PIN)
                  | BMS_I2C_SLAVE_ADDR_BASE;
 
-  data_buf = (BMS_FAST_SAMPL << 7);
-  if (HAL_I2C_Master_Transmit(I2C2, BMS_BQ77_I2C_ADDR, &data_buf, 1, 35U) == HAL_ERROR)
+  // Setup the charge controler
+  data_buf = (BMS_BQ77_OUTCTL << 8) | (BMS_FAST_SAMPL << 7); // CHECK BYTE ORDER! ---------------------------------------------
+  if (HAL_I2C_Master_Transmit(&hi2c2, BMS_BQ77_I2C_ADDR, &data_buf, 2,  BMS_I2C_TIMEOUT) == HAL_ERROR)
     disp_error(BMS_ERR_INIT_BQ77);
 
-  
+  data_buf = (BMS_BQ77_STATECTL << 8) | (BMS_SNSE_CLCUR << 7) | (BMS_SNSE_CLVTG << 6)
+             | (BMS_HOST_HMODE << 1) | (BMS_HOST_SHDWN << 0); // CHECK BYTE ORDER! ---------------------------------------------
+  if (HAL_I2C_Master_Transmit(&hi2c2, BMS_BQ77_I2C_ADDR, &data_buf, 2,  BMS_I2C_TIMEOUT) == HAL_ERROR)
+    disp_error(BMS_ERR_INIT_BQ77);
+
+  data_buf = (BMS_BQ77_FUNCTL << 8) | (BMS_USES_THERM << 5); // CHECK BYTE ORDER! ---------------------------------------------
+  if (HAL_I2C_Master_Transmit(&hi2c2, BMS_BQ77_I2C_ADDR, &data_buf, 2,  BMS_I2C_TIMEOUT) == HAL_ERROR)
+    disp_error(BMS_ERR_INIT_BQ77);
+
+  data_buf = (BMS_BQ77_OVCFG << 8) | (BMS_OV_DLYTM << 5) | (BMS_OV_HYSTR << 3)
+             | (BMS_OV_THRSH << 0); // CHECK BYTE ORDER! ---------------------------------------------
+  if (HAL_I2C_Master_Transmit(&hi2c2, BMS_BQ77_I2C_ADDR, &data_buf, 2,  BMS_I2C_TIMEOUT) == HAL_ERROR)
+    disp_error(BMS_ERR_INIT_BQ77);
+
+  data_buf = (BMS_BQ77_UVCFG << 8) | (BMS_UV_SHDWN << 6) | (BMS_UV_HYSTR << 4)
+             | (BMS_UV_THRSH << 0); // CHECK BYTE ORDER! ---------------------------------------------
+  if (HAL_I2C_Master_Transmit(&hi2c2, BMS_BQ77_I2C_ADDR, &data_buf, 2,  BMS_I2C_TIMEOUT) == HAL_ERROR)
+    disp_error(BMS_ERR_INIT_BQ77);
+
+  data_buf = (BMS_BQ77_OUVCTL << 8) | (BMS_OUV_DELAY << 4) | (BMS_OUV_VTRSH << 0); // CHECK BYTE ORDER! ---------------------------------------------
+  if (HAL_I2C_Master_Transmit(&hi2c2, BMS_BQ77_I2C_ADDR, &data_buf, 2,  BMS_I2C_TIMEOUT) == HAL_ERROR)
+    disp_error(BMS_ERR_INIT_BQ77);
+
+  data_buf = (BMS_BQ77_OCDCFG << 8) | (BMS_OCD_BALNC << 7) | (BMS_OCD_PRCRG << 6)
+           | (BMS_OCD_RCRMD << 5) | (BMS_OCD_DELAY << 0); // CHECK BYTE ORDER! ---------------------------------------------
+  if (HAL_I2C_Master_Transmit(&hi2c2, BMS_BQ77_I2C_ADDR, &data_buf, 2,  BMS_I2C_TIMEOUT) == HAL_ERROR)
+    disp_error(BMS_ERR_INIT_BQ77);
+
+  data_buf = (BMS_BQ77_SCDCFG << 8) | (BMS_SCD_DELAY << 4) | (BMS_SCD_SCDVT << 0); // CHECK BYTE ORDER! ---------------------------------------------
+  if (HAL_I2C_Master_Transmit(&hi2c2, BMS_BQ77_I2C_ADDR, &data_buf, 2,  BMS_I2C_TIMEOUT) == HAL_ERROR)
+    disp_error(BMS_ERR_INIT_BQ77);
+ 
+  // Shut off LEDs
+  HAL_GPIO_WritePin(BMS_GPIO_LED0_BANK, BMS_GPIO_LED0_PIN, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(BMS_GPIO_LED1_BANK, BMS_GPIO_LED1_PIN, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(BMS_GPIO_LED2_BANK, BMS_GPIO_LED2_PIN, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(BMS_GPIO_LED3_BANK, BMS_GPIO_LED3_PIN, GPIO_PIN_RESET);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    // Check if there is any incomming commands from the PMS
+    if (HAL_I2C_Slave_Receive(&hi2c1, data_buf, 1, BMS_I2C_TIMEOUT) != HAL_OK)
+    {
+      /* empty */
+    }
+    else
+    {
+      switch ((uint8_t)data_buf)  // Only care about byte 0
+      {
+        case BMS_GET_STATUS:
+
+          if (HAL_I2C_Mem_Read(&hi2c2, BMS_BQ77_I2C_ADDR, BMS_BQ77_STATUS, I2C_MEMADD_SIZE_8BIT, &data_buf, 1, BMS_I2C_TIMEOUT) == HAL_OK)
+          {
+            data_buf &= ~(BMS_BQ77_STATUS_VGOOD); // Return STATUS reg without EEPROM voltage flag
+          }
+          else
+          {
+            data_buf = BMS_ERROR_VALUE;
+          }
+          
+          HAL_I2C_Slave_Transmit(&hi2c1, &data_buf, 1, BMS_I2C_TIMEOUT);
+          break;
+        case BMS_GET_PACK_VOLTAGE:
+
+            // SOMETHING
+          break;
+        case BMS_GET_CURRENT:
+
+            // SOMETHING
+          break; 
+        // case BMS_TURN_OUTPUT_ON:   // Only available in HOST control mode
+
+        //   if (BMS_HOST_HMODE)
+        //   {
+        //     data_buf = (BMS_OC_DSC) | (BMS_FAST_SAMPL << 7);
+        //     if (HAL_I2C_Mem_Write(&hi2c2, BMS_BQ77_I2C_ADDR, BMS_BQ77_OUTCTL, I2C_MEMADD_SIZE_8BIT, &data_buf, 1, BMS_I2C_TIMEOUT) == HAL_OK)
+        //     {
+        //       data_buf = 0;
+        //     }
+        //     else
+        //     {
+        //       data_buf = BMS_ERROR_VALUE;
+        //     }
+        //     HAL_I2C_Slave_Transmit(&hi2c1, &data_buf, 1, BMS_I2C_TIMEOUT);
+        //   }
+        //   break;
+        // case BMS_TURN_OUTPUT_OFF:   // Only available in HOST control mode
+
+        //   if (BMS_HOST_HMODE)
+        //   {
+        //     // SOMETHING
+        //   }
+        //   break;
+        default:
+
+          break;
+      }
+    }
+    
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
