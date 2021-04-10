@@ -31,7 +31,9 @@
 // Error LED codes
 typedef enum
 {
- BMS_ERR_INIT_BQ77
+ BMS_ERR_INIT_BQ77,
+ BMS_ERR_CALS_ADC,
+ BMS_ERR_EH           // Generic Handle_Error() error
 } BMS_Error_Code;
 
 
@@ -59,6 +61,9 @@ typedef enum
 
 #define BMS_ERROR_VALUE 0xff  // Value returned if there was an error processing
                               //  a request on the slave I2C channel
+
+// ADC polling timeout
+#define BMS_ADC_TIMEOUT 35U   // In ms
 
 // PINS
 #define BMS_GPIO_0_BANK       GPIOB
@@ -92,7 +97,7 @@ typedef enum
 // ---
 
 // I2C with bq77p900
-#define BMS_BQ77_I2C_ADDR 0x10 << 1
+#define BMS_BQ77_I2C_ADDR (0x10 << 1) // HEY: Does this need to be shifted?
 
 // Registers
 #define BMS_BQ77_STATUS   0x00
@@ -174,7 +179,8 @@ I2C_HandleTypeDef hi2c2;
 /* USER CODE BEGIN PV */
 
 uint16_t bms_i2c_addr;  // Address of BMS (slave interface)
-uint64_t data_buf;      // Data to be sent or received over I2C
+uint8_t data_buf;       // Data to be sent or received over I2C
+uint32_t hadc_val;      // Read ADC value
 
 /* USER CODE END PV */
 
@@ -242,46 +248,56 @@ int main(void)
   HAL_GPIO_WritePin(BMS_GPIO_LED3_BANK, BMS_GPIO_LED3_PIN, GPIO_PIN_SET);
 
   // Get slave address
-  bms_i2c_addr = HAL_GPIO_ReadPin(BMS_GPIO_SLOTID_BANK, BMS_GPIO_SLOTID_PIN)
-                 | BMS_I2C_SLAVE_ADDR_BASE;
+  bms_i2c_addr = HAL_GPIO_ReadPin(BMS_GPIO_SLOTID_BANK, BMS_GPIO_SLOTID_PIN) | BMS_I2C_SLAVE_ADDR_BASE;
+
+  // TODO: REPLACE BELOW MASTER TRANSMITS TO MEM WRITES
 
   // Setup the charge controler
-  data_buf = (BMS_BQ77_OUTCTL << 8) | (BMS_FAST_SAMPL << 7); // CHECK BYTE ORDER! ---------------------------------------------
-  if (HAL_I2C_Master_Transmit(&hi2c2, BMS_BQ77_I2C_ADDR, &data_buf, 2,  BMS_I2C_TIMEOUT) == HAL_ERROR)
+  data_buf = (BMS_FAST_SAMPL << 7);
+  if (HAL_I2C_Mem_Write(&hi2c2, BMS_BQ77_I2C_ADDR, BMS_BQ77_OUTCTL, 1, &data_buf, 1, BMS_I2C_TIMEOUT) == HAL_ERROR)
     disp_error(BMS_ERR_INIT_BQ77);
 
-  data_buf = (BMS_BQ77_STATECTL << 8) | (BMS_SNSE_CLCUR << 7) | (BMS_SNSE_CLVTG << 6)
-             | (BMS_HOST_HMODE << 1) | (BMS_HOST_SHDWN << 0); // CHECK BYTE ORDER! ---------------------------------------------
-  if (HAL_I2C_Master_Transmit(&hi2c2, BMS_BQ77_I2C_ADDR, &data_buf, 2,  BMS_I2C_TIMEOUT) == HAL_ERROR)
+  data_buf = (BMS_SNSE_CLCUR << 7) | (BMS_SNSE_CLVTG << 6) | (BMS_HOST_HMODE << 1) | (BMS_HOST_SHDWN << 0);
+  if (HAL_I2C_Mem_Write(&hi2c2, BMS_BQ77_I2C_ADDR, BMS_BQ77_STATECTL, 1, &data_buf, 1, BMS_I2C_TIMEOUT) == HAL_ERROR)
     disp_error(BMS_ERR_INIT_BQ77);
 
-  data_buf = (BMS_BQ77_FUNCTL << 8) | (BMS_USES_THERM << 5); // CHECK BYTE ORDER! ---------------------------------------------
-  if (HAL_I2C_Master_Transmit(&hi2c2, BMS_BQ77_I2C_ADDR, &data_buf, 2,  BMS_I2C_TIMEOUT) == HAL_ERROR)
+  data_buf = (BMS_USES_THERM << 5);
+  if (HAL_I2C_Mem_Write(&hi2c2, BMS_BQ77_I2C_ADDR, BMS_BQ77_FUNCTL, 1, &data_buf, 1, BMS_I2C_TIMEOUT) == HAL_ERROR)
     disp_error(BMS_ERR_INIT_BQ77);
 
-  data_buf = (BMS_BQ77_OVCFG << 8) | (BMS_OV_DLYTM << 5) | (BMS_OV_HYSTR << 3)
-             | (BMS_OV_THRSH << 0); // CHECK BYTE ORDER! ---------------------------------------------
-  if (HAL_I2C_Master_Transmit(&hi2c2, BMS_BQ77_I2C_ADDR, &data_buf, 2,  BMS_I2C_TIMEOUT) == HAL_ERROR)
+  data_buf = (BMS_OV_DLYTM << 5) | (BMS_OV_HYSTR << 3) | (BMS_OV_THRSH << 0);
+  if (HAL_I2C_Mem_Write(&hi2c2, BMS_BQ77_I2C_ADDR, BMS_BQ77_OVCFG, 1, &data_buf, 1, BMS_I2C_TIMEOUT) == HAL_ERROR)
     disp_error(BMS_ERR_INIT_BQ77);
 
-  data_buf = (BMS_BQ77_UVCFG << 8) | (BMS_UV_SHDWN << 6) | (BMS_UV_HYSTR << 4)
-             | (BMS_UV_THRSH << 0); // CHECK BYTE ORDER! ---------------------------------------------
-  if (HAL_I2C_Master_Transmit(&hi2c2, BMS_BQ77_I2C_ADDR, &data_buf, 2,  BMS_I2C_TIMEOUT) == HAL_ERROR)
+  data_buf = (BMS_UV_SHDWN << 6) | (BMS_UV_HYSTR << 4) | (BMS_UV_THRSH << 0);
+  if (HAL_I2C_Mem_Write(&hi2c2, BMS_BQ77_I2C_ADDR, BMS_BQ77_UVCFG, 1, &data_buf, 1, BMS_I2C_TIMEOUT) == HAL_ERROR)
     disp_error(BMS_ERR_INIT_BQ77);
 
-  data_buf = (BMS_BQ77_OUVCTL << 8) | (BMS_OUV_DELAY << 4) | (BMS_OUV_VTRSH << 0); // CHECK BYTE ORDER! ---------------------------------------------
-  if (HAL_I2C_Master_Transmit(&hi2c2, BMS_BQ77_I2C_ADDR, &data_buf, 2,  BMS_I2C_TIMEOUT) == HAL_ERROR)
+  data_buf = (BMS_OUV_DELAY << 4) | (BMS_OUV_VTRSH << 0);
+  if (HAL_I2C_Mem_Write(&hi2c2, BMS_BQ77_I2C_ADDR, BMS_BQ77_OUVCTL, 1, &data_buf, 1, BMS_I2C_TIMEOUT) == HAL_ERROR)
     disp_error(BMS_ERR_INIT_BQ77);
 
-  data_buf = (BMS_BQ77_OCDCFG << 8) | (BMS_OCD_BALNC << 7) | (BMS_OCD_PRCRG << 6)
-           | (BMS_OCD_RCRMD << 5) | (BMS_OCD_DELAY << 0); // CHECK BYTE ORDER! ---------------------------------------------
-  if (HAL_I2C_Master_Transmit(&hi2c2, BMS_BQ77_I2C_ADDR, &data_buf, 2,  BMS_I2C_TIMEOUT) == HAL_ERROR)
+  data_buf = (BMS_OCD_BALNC << 7) | (BMS_OCD_PRCRG << 6) | (BMS_OCD_RCRMD << 5) | (BMS_OCD_DELAY << 0);
+  if (HAL_I2C_Mem_Write(&hi2c2, BMS_BQ77_I2C_ADDR, BMS_BQ77_OCDCFG, 1, &data_buf, 1, BMS_I2C_TIMEOUT) == HAL_ERROR)
     disp_error(BMS_ERR_INIT_BQ77);
 
-  data_buf = (BMS_BQ77_SCDCFG << 8) | (BMS_SCD_DELAY << 4) | (BMS_SCD_SCDVT << 0); // CHECK BYTE ORDER! ---------------------------------------------
-  if (HAL_I2C_Master_Transmit(&hi2c2, BMS_BQ77_I2C_ADDR, &data_buf, 2,  BMS_I2C_TIMEOUT) == HAL_ERROR)
+  data_buf = (BMS_SCD_DELAY << 4) | (BMS_SCD_SCDVT << 0);
+  if (HAL_I2C_Mem_Write(&hi2c2, BMS_BQ77_I2C_ADDR, BMS_BQ77_SCDCFG, 1, &data_buf, 1, BMS_I2C_TIMEOUT) == HAL_ERROR)
     disp_error(BMS_ERR_INIT_BQ77);
  
+  
+
+  HAL_ADC_Init(&hadc1);
+  HAL_ADC_Init(&hadc2);
+  
+  /* Run the ADC calibration */  
+  if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK || HAL_ADCEx_Calibration_Start(&hadc2) != HAL_OK)
+  {
+    /* Calibration Error */
+    disp_error(BMS_ERR_CALS_ADC);
+  }
+
+
   // Shut off LEDs
   HAL_GPIO_WritePin(BMS_GPIO_LED0_BANK, BMS_GPIO_LED0_PIN, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(BMS_GPIO_LED1_BANK, BMS_GPIO_LED1_PIN, GPIO_PIN_RESET);
@@ -297,7 +313,7 @@ int main(void)
     // Check if there is any incomming commands from the PMS
     if (HAL_I2C_Slave_Receive(&hi2c1, data_buf, 1, BMS_I2C_TIMEOUT) != HAL_OK)
     {
-      /* empty */
+      /* intentionally empty, left for easy error handling implementation in the future */
     }
     else
     {
@@ -318,11 +334,39 @@ int main(void)
           break;
         case BMS_GET_PACK_VOLTAGE:
 
-            // SOMETHING
+          HAL_ADC_Start(&hadc1);
+
+          if (HAL_ADC_PollForConversion(&hadc1, BMS_ADC_TIMEOUT) == HAL_OK)
+          {
+            hadc_val = HAL_ADC_GetValue(&hadc1); // NOTE: not sure how to tell this which pin to read
+          }
+          else
+          {
+            hadc_val = 0;
+          }
+
+          HAL_ADC_Stop(&hadc1);
+
+          // TODO: SEND BACK hadc_val
+
           break;
         case BMS_GET_CURRENT:
 
-            // SOMETHING
+            HAL_ADC_Start(&hadc2);
+
+            if (HAL_ADC_PollForConversion(&hadc2, BMS_ADC_TIMEOUT) == HAL_OK)
+            {
+              hadc_val = HAL_ADC_GetValue(&hadc2); // NOTE: not sure how to tell this which pin to read
+            }
+            else
+            {
+              hadc_val = 0;
+            }
+
+            HAL_ADC_Stop(&hadc2);
+
+            // TODO: SEND BACK hadc_val
+
           break; 
         // case BMS_TURN_OUTPUT_ON:   // Only available in HOST control mode
 
@@ -356,9 +400,6 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
-    // Zach code
-    
   }
   /* USER CODE END 3 */
 }
@@ -630,6 +671,7 @@ void Error_Handler(void)
   __disable_irq();
   while (1)
   {
+    disp_error(BMS_ERR_EH);
   }
   /* USER CODE END Error_Handler_Debug */
 }
