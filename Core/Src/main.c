@@ -31,7 +31,7 @@
 // Error LED codes
 typedef enum BMS_Error_Code
 {
- BMS_ERR_INIT_BQ77,
+ BMS_ERR_INIT_BQ77 = 1,
  BMS_ERR_CALS_ADC,
  BMS_ERR_EH           // Generic Handle_Error() error
 } BMS_Error_Code;
@@ -250,8 +250,6 @@ int main(void)
   // Get slave address
   bms_i2c_addr = HAL_GPIO_ReadPin(BMS_GPIO_SLOTID_BANK, BMS_GPIO_SLOTID_PIN) | BMS_I2C_SLAVE_ADDR_BASE;
 
-  // TODO: REPLACE BELOW MASTER TRANSMITS TO MEM WRITES
-
   // Setup the charge controller
   data_buf = (BMS_FAST_SAMPL << 7);
   if (HAL_I2C_Mem_Write(&hi2c2, BMS_BQ77_I2C_ADDR, BMS_BQ77_OUTCTL, 1, &data_buf, 1, BMS_I2C_TIMEOUT) == HAL_ERROR)
@@ -348,7 +346,7 @@ int main(void)
           HAL_ADC_Stop(&hadc1);
 
           // SEND BACK hadc_val
-          HAL_I2C_Salave_Transmit(&hi2c1, &hadc_val, 4, BMS_I2C_TIMEOUT);
+          HAL_I2C_Slave_Transmit(&hi2c1, &hadc_val, 4, BMS_I2C_TIMEOUT);
 
           break;
         case BMS_GET_CURRENT:
@@ -367,7 +365,7 @@ int main(void)
             HAL_ADC_Stop(&hadc2);
 
             // SEND BACK hadc_val
-            HAL_I2C_Salave_Transmit(&hi2c1, &hadc_val, 4, BMS_I2C_TIMEOUT);
+            HAL_I2C_Slave_Transmit(&hi2c1, &hadc_val, 4, BMS_I2C_TIMEOUT);
 
           break; 
         // case BMS_TURN_OUTPUT_ON:   // Only available in HOST control mode
@@ -658,15 +656,29 @@ static void MX_GPIO_Init(void)
 static void disp_error(BMS_Error_Code code)
 {
   __disable_irq();
+  
+  uint32_t i;
+  while (1) {
+    HAL_GPIO_WritePin(BMS_GPIO_LED0_BANK, BMS_GPIO_LED0_PIN, code & (1 << 0) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(BMS_GPIO_LED1_BANK, BMS_GPIO_LED1_PIN, code & (1 << 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(BMS_GPIO_LED2_BANK, BMS_GPIO_LED2_PIN, code & (1 << 2) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(BMS_GPIO_LED3_BANK, BMS_GPIO_LED3_PIN, code & (1 << 3) ? GPIO_PIN_SET : GPIO_PIN_RESET);
 
-  HAL_GPIO_WritePin(BMS_GPIO_LED0_BANK, BMS_GPIO_LED0_PIN, code & (1 << 0) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(BMS_GPIO_LED1_BANK, BMS_GPIO_LED1_PIN, code & (1 << 1) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(BMS_GPIO_LED2_BANK, BMS_GPIO_LED2_PIN, code & (1 << 2) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(BMS_GPIO_LED3_BANK, BMS_GPIO_LED3_PIN, code & (1 << 3) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    for (i = 0; i < 100000; i++)
+    {
+    /* spin */
+    }
 
-  while (1)
-  {
-	/* spin */
+    // Shut off LEDs
+    HAL_GPIO_WritePin(BMS_GPIO_LED0_BANK, BMS_GPIO_LED0_PIN, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(BMS_GPIO_LED1_BANK, BMS_GPIO_LED1_PIN, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(BMS_GPIO_LED2_BANK, BMS_GPIO_LED2_PIN, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(BMS_GPIO_LED3_BANK, BMS_GPIO_LED3_PIN, GPIO_PIN_RESET);
+
+    for (i = 0; i < 100000; i++)
+    {
+    /* spin */
+    }
   }
 }
 
